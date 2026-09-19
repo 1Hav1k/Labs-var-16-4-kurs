@@ -1,0 +1,7 @@
+services:
+  pacman-web:
+    build: .
+    container_name: pacman-container
+    ports:
+      - "8080:80"
+    restart: unless-stopped

@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <meta charset="UTF-8">
+        <link rel = "stylesheet" href = "css.css">
+        <title>Pacman - Main menu</title>
+    </head>
+    <body class = "body">
+        <div class = "textmenu">
+            <h1>Main menu</h1>
+        </div>
+        <div>
+            <a href = "pacman.html" class = "button">Play</a><br><br>
+            <button onclick = "showHighScores()" class = "button">Score Table<br><br>
+        </div>
+        <script>
+            const highScoresKey = 'HighScores';
+            function showHighScores() {
+                const highScores = JSON.parse(localStorage.getItem(highScoresKey)) || [];
+                alert('Таблица рекордов:\n' + highScores.map((hs, i) => `${i + 1}. ${hs.name} - ${hs.score}`).join('\n'));
+            }
+        </script>
+    </body>
+</html>
