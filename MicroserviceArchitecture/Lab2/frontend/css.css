@@ -1,0 +1,41 @@
+.body {
+    font-family: Emulogic, Arial;
+    text-align: center;
+    margin: 30px;
+    padding: 0;
+    background-color: black;
+    background-image: url("1.jpg");
+}
+
+.body1 {
+    font-family: Emulogic, Arial;
+    text-align: center;
+    margin: 30px;
+    padding: 0;
+    background-color: black;
+
+}
+
+.button {
+    margin: 15px;
+    padding: 15px;
+    font-size: 40px;
+    text-decoration: none;
+    color: white;
+    font-family: Emulogic, Arial;
+    background-color: transparent;
+    border-width: 0px;
+    cursor: pointer;
+}
+
+.textmenu {
+    text-align: center;
+    color: white;
+    font-size: 30px;
+}
+
+.pacman {
+    margin: 30px;
+    text-align: center;
+    background-color: black;
+}
