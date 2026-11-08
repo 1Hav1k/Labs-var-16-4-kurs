@@ -101,15 +101,15 @@ def fourier_coefficients(vertices, l, K):
     for (x1, y1), (x2, y2) in zip(vertices[:-1], vertices[1:]):
         s = (y2 - y1) / (x2 - x1)
         total += s * (np.sin(mu * x2) - np.sin(mu * x1))
-    return k, mu, 2.0 / (l * mu ** 2) * total
+    return mu, 2.0 / (l * mu ** 2) * total
 
 
 def solve_analytic(x, t, a, l, vertices, K):
     """T(x,t) = Σ_{k=1}^{K} C_k exp(-a (pi k / l)^2 t) sin(pi k x / l)."""
-    k, mu, C = fourier_coefficients(vertices, l, K)
-    S = np.sin(np.outer(mu, x))                    # K x N
-    E = np.exp(-a * np.outer(t, mu ** 2))          # (M+1) x K
-    return (E * C) @ S                             # (M+1) x N
+    mu, C = fourier_coefficients(vertices, l, K)
+    S = np.sin(np.outer(mu, x))
+    E = np.exp(-a * np.outer(t, mu ** 2))
+    return (E * C) @ S
 
 
 # ----------------------------- 2. Явная схема --------------------------------
@@ -132,36 +132,6 @@ def solve_explicit(T0v, rs):
             U[n + 1, -1] = 0.0
     return U
 
-
-# ---------------------------- Метод прогонки ---------------------------------
-def progonka(A, B, C, F, T_left, T_right):
-    """
-    Решение системы  -A_i T_{i-1} + C_i T_i - B_i T_{i+1} = F_i,  i = 1..N-2,
-    при известных T_0 = T_left, T_{N-1} = T_right.
-
-    Прямой ход:  alpha_0 = 0, beta_0 = T_0;  i = 1..N-2:
-        alpha_i = B_i / (C_i - A_i alpha_{i-1})
-        beta_i  = (F_i + A_i beta_{i-1}) / (C_i - A_i alpha_{i-1})
-    Обратный ход: T_{N-1} = T_right;  i = N-2..1:
-        T_i = alpha_i T_{i+1} + beta_i
-    """
-    N = len(F)
-    alpha = np.zeros(N)
-    beta = np.zeros(N)
-    alpha[0] = 0.0
-    beta[0] = T_left
-    for i in range(1, N - 1):
-        denom = C - A * alpha[i - 1]
-        alpha[i] = B / denom
-        beta[i] = (F[i] + A * beta[i - 1]) / denom
-    T = np.zeros(N)
-    T[0] = T_left
-    T[N - 1] = T_right
-    for i in range(N - 2, 0, -1):
-        T[i] = alpha[i] * T[i + 1] + beta[i]
-    return T
-
-
 # ---------------------------- 3. Неявная схема -------------------------------
 def solve_implicit(T0v, rs):
     """
@@ -173,15 +143,17 @@ def solve_implicit(T0v, rs):
     U = np.zeros((M + 1, N))
     U[0] = T0v
     U[0, 0] = U[0, -1] = 0.0
+    cache = {}
     for n in range(M):
         r = rs[n]
         A = B = r
         C = 1.0 + 2.0 * r
+        alpha, gamma = _cached_coefficients(cache, A, B, C, N)
         F = U[n].copy()
-        U[n + 1] = progonka(A, B, C, F, 0.0, 0.0)
+        U[n + 1] = progonka(alpha, gamma, A, F, 0.0, 0.0)
     return U
-
-
+ 
+ 
 # ---------------------------- 4. Схема с весами ------------------------------
 def solve_weighted(T0v, rs, sigma):
     """
@@ -195,16 +167,66 @@ def solve_weighted(T0v, rs, sigma):
     U = np.zeros((M + 1, N))
     U[0] = T0v
     U[0, 0] = U[0, -1] = 0.0
+    cache = {}
     for n in range(M):
         r = rs[n]
         A = B = sigma * r
         C = 1.0 + 2.0 * sigma * r
+        alpha, gamma = _cached_coefficients(cache, A, B, C, N)
         T = U[n]
         F = T.copy()
         F[1:-1] = T[1:-1] + (1.0 - sigma) * r * (T[2:] - 2 * T[1:-1] + T[:-2])
-        U[n + 1] = progonka(A, B, C, F, 0.0, 0.0)
+        U[n + 1] = progonka(alpha, gamma, A, F, 0.0, 0.0)
     return U
 
+# ---------------------------- Метод прогонки ---------------------------------
+def progonka_coefficients(A, B, C, N):
+    """
+    Прямой ход прогонки, часть 1 — то, что НЕ зависит от правой части F.
+    Матрица системы  -A T_{i-1} + C T_i - B T_{i+1} = F_i  одна и та же на всех
+    временных слоях (при постоянном r), поэтому alpha_i и множители
+        gamma_i = 1 / (C - A alpha_{i-1}),   alpha_i = B * gamma_i,   i = 1..N-2,
+    вычисляются ОДИН раз до начала расчёта по времени (alpha_0 = 0).
+    """
+    alpha = np.zeros(N)
+    gamma = np.zeros(N)
+    for i in range(1, N - 1):
+        gamma[i] = 1.0 / (C - A * alpha[i - 1])
+        alpha[i] = B * gamma[i]
+    return alpha, gamma
+ 
+ 
+def progonka(alpha, gamma, A, F, T_left, T_right):
+    """
+    Решение системы  -A_i T_{i-1} + C_i T_i - B_i T_{i+1} = F_i,  i = 1..N-2,
+    при известных T_0 = T_left, T_{N-1} = T_right, с заранее вычисленными
+    alpha_i и gamma_i (см. progonka_coefficients). На каждом слое — 5 операций на узел:
+ 
+    Прямой ход:  beta_0 = T_0;  i = 1..N-2:
+        beta_i = (F_i + A_i beta_{i-1}) * gamma_i          — 3 операции (×, +, ×)
+    Обратный ход: T_{N-1} = T_right;  i = N-2..1:
+        T_i = alpha_i T_{i+1} + beta_i                      — 2 операции (×, +)
+    """
+    N = len(F)
+    beta = np.zeros(N)
+    beta[0] = T_left
+    for i in range(1, N - 1):
+        beta[i] = (F[i] + A * beta[i - 1]) * gamma[i]
+    T = np.zeros(N)
+    T[0] = T_left
+    T[N - 1] = T_right
+    for i in range(N - 2, 0, -1):
+        T[i] = alpha[i] * T[i + 1] + beta[i]
+    return T
+ 
+ 
+def _cached_coefficients(cache, A, B, C, N):
+    """Прогоночные коэффициенты для данной матрицы считаются один раз и запоминаются
+    (при укороченном последнем шаге r' != r нужен второй набор)."""
+    key = (round(A, 14), round(B, 14), round(C, 14))
+    if key not in cache:
+        cache[key] = progonka_coefficients(A, B, C, N)
+    return cache[key]
 
 # =============================================================================
 #                                ГРАФИКИ
