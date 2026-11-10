@@ -1,26 +1,13 @@
-"""
-Лабораторная работа №4
-«Задача диффузии-конвекции»
-Дисциплина «Математическое и имитационное моделирование»
-
-Уравнение:  dC/dt + u dC/dx = d/dx(mu dC/dx) + f,   0 < x < L,  0 < t <= T
-Начальное условие: треугольный импульс C0(x)
-Граничные условия: C(0, t) = C_left,   dC/dx(L, t) = p - q*C(L, t)
-
-Численный метод: интегро-интерполяционный метод (метод баланса),
-весовая схема с параметром sigma, решение СЛАУ методом прогонки.
-"""
-
 import math
 
 import numpy as np
 from matplotlib.figure import Figure
 
-try:  # графический интерфейс (tkinter входит в стандартную поставку Python)
+try:
     import tkinter as tk
     from tkinter import ttk, messagebox, filedialog
     from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
-except ImportError:  # позволяет использовать расчётную часть без GUI
+except ImportError:
     tk = None
 
 
@@ -39,28 +26,30 @@ def initial_condition(x, x1=10.0, x2=20.0, x3=30.0, height=1.0):
     return c0
 
 
-def progonka(a, b, d, F, alpha1=0.0, beta1=0.0):
-    """Метод прогонки для трёхдиагональной системы
-        C_0 = alpha1 * C_1 + beta1                          (левое ГУ)
-        -a_i C_{i-1} + d_i C_i - b_i C_{i+1} = F_i,  i = 1..N-1
-        -a_N C_{N-1} + d_N C_N = F_N                        (правое ГУ, b_N = 0)
-    Прямой ход:  alpha_{i+1} = b_i / (d_i - a_i alpha_i),
-                 beta_{i+1}  = (F_i + a_i beta_i) / (d_i - a_i alpha_i)
-    Обратный ход: C_i = alpha_{i+1} C_{i+1} + beta_{i+1}
-    """
-    n = len(F) - 1
-    alpha = np.zeros(n + 2)
-    beta = np.zeros(n + 2)
-    alpha[1], beta[1] = alpha1, beta1
+def progonka_prepare(a, b, d, alpha1=0.0):
+    """Подготовительный этап оптимизированной прогонки."""
+    n = len(d) - 1
+    alpha = [0.0] * (n + 2)
+    r = [0.0] * (n + 1)
+    alpha[1] = alpha1
     for i in range(1, n + 1):
-        den = d[i] - a[i] * alpha[i]
-        alpha[i + 1] = b[i] / den
-        beta[i + 1] = (F[i] + a[i] * beta[i]) / den
-    c = np.zeros(n + 1)
-    c[n] = beta[n + 1]                      # т.к. b_N = 0, alpha_{N+1} = 0
+        r[i] = 1.0 / (d[i] - a[i] * alpha[i])
+        alpha[i + 1] = b[i] * r[i]
+    return alpha, r
+
+
+def progonka_solve(a, alpha, r, F, beta1=0.0):
+    """Решение системы на одном временном слое за 5N операций."""
+    n = len(F) - 1
+    beta = [0.0] * (n + 2)
+    beta[1] = beta1
+    for i in range(1, n + 1):
+        beta[i + 1] = (F[i] + a[i] * beta[i]) * r[i]
+    c = [0.0] * (n + 1)
+    c[n] = beta[n + 1]
     for i in range(n - 1, -1, -1):
         c[i] = alpha[i + 1] * c[i + 1] + beta[i + 1]
-    return c
+    return np.array(c)
 
 
 def solve(L=100.0, T=50.0, u=0.5, mu=1.0, f=0.0, h=0.5, tau=0.1, sigma=1.0,
@@ -105,6 +94,9 @@ def solve(L=100.0, T=50.0, u=0.5, mu=1.0, f=0.0, h=0.5, tau=0.1, sigma=1.0,
     times = [0.0]
     history = [c.copy()]
     F = np.zeros(N + 1)
+    # прогоночные коэффициенты alpha_i и r_i = 1/(d_i - a_i alpha_i) — один раз
+    a_list = a.tolist()
+    alpha, r = progonka_prepare(a_list, b.tolist(), d.tolist(), alpha1=0.0)
     for n in range(1, M + 1):
         # правая часть для внутренних узлов
         conv = u * (c[2:] - c[:-2]) / (2 * h)
@@ -116,7 +108,7 @@ def solve(L=100.0, T=50.0, u=0.5, mu=1.0, f=0.0, h=0.5, tau=0.1, sigma=1.0,
                     - (1 - sigma) * (Ar * (c[N] - c[N - 1]) + 2 * mu * q / h * c[N]))
         else:
             F[N] = p
-        c = progonka(a, b, d, F, alpha1=0.0, beta1=c_left)
+        c = progonka_solve(a_list, alpha, r, F.tolist(), beta1=c_left)   # 5N операций
         if not np.all(np.isfinite(c)) or np.max(np.abs(c)) > 1e6:
             times.append(n * tau)
             history.append(np.clip(np.nan_to_num(c, nan=1e6), -1e6, 1e6))
@@ -319,7 +311,8 @@ class App:
         err = np.max(np.abs(c_end[inner] - analytic_free(x[inner], times[-1], p["u"], p["mu"],
                                                          p["f"], init)))
         lines = [stability_info(p["u"], p["mu"], p["h"], p["tau"], p["sigma"]), "",
-                 f"Узлов N+1 = {len(x)}, слоёв по времени = {int(round(p['T'] / p['tau']))}"]
+                 f"Узлов N+1 = {len(x)}, слоёв по времени = {int(round(p['T'] / p['tau']))}",
+                 "Прогонка: α и 1/(d−aα) вычислены один раз, на слой — 5N операций"]
         if times[-1] < p["T"] - 1e-9:
             lines.append(f"!!! Решение разрушилось при t = {times[-1]:.3g} с")
         else:
